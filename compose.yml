@@ -1,0 +1,10 @@
+services:
+  downloader:
+#    build:
+#      context: .
+    image: davidecavestro/vimeo-dl
+    volumes:
+    - ./out:/downloads
+    environment:
+    - SRC_URL=${SRC_URL}
+    - OUT_FILE=${OUT_FILE}
