@@ -6,7 +6,6 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 from tqdm import tqdm
-from moviepy.editor import *
 import ffmpeg
 
 
@@ -32,6 +31,7 @@ def download_segment(segment_url, segment_path):
         for chunk in resp:
             segment_file.write(chunk)
 
+
 def download(what, to, base, max_workers):
     print('saving', what['mime_type'], 'to', to)
     init_segment = base64.b64decode(what['init_segment'])
@@ -40,7 +40,8 @@ def download(what, to, base, max_workers):
     segment_paths = [f"segment_{i}.tmp" for i in range(len(segment_urls))]
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        list(tqdm(executor.map(download_segment, segment_urls, segment_paths), total=len(segment_urls)))
+        list(tqdm(executor.map(download_segment, segment_urls,
+             segment_paths), total=len(segment_urls)))
 
     with open(to, 'wb') as file:
         file.write(init_segment)
@@ -71,16 +72,19 @@ audio_tmp_file = 'audio.mp4'
 download(video, video_tmp_file, base_url + video['base_url'], max_workers)
 download(audio, audio_tmp_file, base_url + audio['base_url'], max_workers)
 
+
 def combine_video_audio(video_file, audio_file, output_file):
     try:
         video_stream = ffmpeg.input(video_file)
         audio_stream = ffmpeg.input(audio_file)
 
-        ffmpeg.output(video_stream, audio_stream, output_file, vcodec='copy', acodec='copy').run(overwrite_output=True)
+        ffmpeg.output(video_stream, audio_stream, output_file,
+                      vcodec='copy', acodec='copy').run(overwrite_output=True)
 
         print(f"Fragments joined into {output_file}")
     except ffmpeg.Error as e:
         print(f"Cannot join fragments: {e.stderr.decode()}")
+
 
 combine_video_audio('video.mp4', 'audio.mp4', name)
 
