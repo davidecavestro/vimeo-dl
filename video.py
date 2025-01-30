@@ -1,24 +1,64 @@
-import os
+import importlib.metadata
+import subprocess
 import sys
+
+required = {'requests', 'tqdm', 'moviepy'}
+installed = {pkg.metadata['Name'] for pkg in importlib.metadata.distributions()}
+missing = required - installed
+
+if missing:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'])
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', *missing])
+
+
+import os
 import base64
 import requests
-import subprocess
+from shutil import which
+from tqdm import tqdm
+from random import choice
+from string import ascii_lowercase
 from concurrent.futures import ThreadPoolExecutor
 
-from tqdm import tqdm
-import ffmpeg
+has_ffmpeg = False
+moviepy_deprecated = False
+has_youtube_dl = False
+has_yt_dlp = False
 
+if which('ffmpeg') is not None:
+    has_ffmpeg = True
 
-url = os.getenv("SRC_URL") or input('enter [master|playlist].json url: ')
-name = os.getenv("OUT_FILE") or input('enter output name: ')
-max_workers = min(int(os.getenv("MAX_WORKERS", 5)), 15)
+if which('youtube-dl') is not None:
+    has_youtube_dl = True
+
+if which('yt-dlp') is not None:
+    has_yt_dlp = True
+
+if not has_ffmpeg:
+    try:
+        from moviepy.editor import *  # before 2.0, deprecated
+        moviepy_deprecated = True
+    except ImportError:
+        from moviepy import *  # after 2.0
+
+url = input('enter [master|playlist].json url: ')
+name = input('enter output name: ')
 
 if 'master.json' in url:
     url = url[:url.find('?')] + '?query_string_ranges=1'
     url = url.replace('master.json', 'master.mpd')
     print(url)
-    subprocess.run(['youtube-dl', url, '-o', name])
-    sys.exit(0)
+
+    if has_youtube_dl:
+        subprocess.run(['youtube-dl', url, '-o', name])
+        sys.exit(0)
+
+    if has_yt_dlp:
+        subprocess.run(['yt-dlp', url, '-o', name])
+        sys.exit(0)
+
+    print('you should have youtube-dl or yt-dlp in your PATH to download master.json like links')
+    sys.exit(1)
 
 
 def download_segment(segment_url, segment_path):
@@ -32,16 +72,18 @@ def download_segment(segment_url, segment_path):
             segment_file.write(chunk)
 
 
-def download(what, to, base, max_workers):
+def download(what, to, base):
     print('saving', what['mime_type'], 'to', to)
     init_segment = base64.b64decode(what['init_segment'])
 
-    segment_urls = [base + segment['url'] for segment in what['segments']]
-    segment_paths = [f"segment_{i}.tmp" for i in range(len(segment_urls))]
+    # suffix for support multiple downloads in same folder
+    segment_suffix = ''.join(choice(ascii_lowercase) for i in range(20)) + '_'
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        list(tqdm(executor.map(download_segment, segment_urls,
-             segment_paths), total=len(segment_urls)))
+    segment_urls = [base + segment['url'] for segment in what['segments']]
+    segment_paths = [f"segment_{i}_" + segment_suffix + ".tmp" for i in range(len(segment_urls))]
+
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        list(tqdm(executor.map(download_segment, segment_urls, segment_paths), total=len(segment_urls)))
 
     with open(to, 'wb') as file:
         file.write(init_segment)
@@ -53,40 +95,63 @@ def download(what, to, base, max_workers):
     print('done')
 
 
+name += '.mp4'
 base_url = url[:url.rfind('/', 0, -26) + 1]
-content = requests.get(url).json()
+response = requests.get(url)
+if response.status_code >= 400:
+    print('error: cant get url content, test your link in browser, code=', response.status_code, '\ncontent:\n', response.content)
+    sys.exit(1)
+
+content = response.json()
 
 vid_heights = [(i, d['height']) for (i, d) in enumerate(content['video'])]
 vid_idx, _ = max(vid_heights, key=lambda _h: _h[1])
 
-audio_quality = [(i, d['bitrate']) for (i, d) in enumerate(content['audio'])]
-audio_idx, _ = max(audio_quality, key=lambda _h: _h[1])
+audio_present = True
+if not content['audio']:
+    audio_present = False
 
-video = content['video'][vid_idx]
-audio = content['audio'][audio_idx]
+audio_quality = None
+audio_idx = None
+if audio_present:
+    audio_quality = [(i, d['bitrate']) for (i, d) in enumerate(content['audio'])]
+    audio_idx, _ = max(audio_quality, key=lambda _h: _h[1])
+
 base_url = base_url + content['base_url']
 
-video_tmp_file = 'video.mp4'
-audio_tmp_file = 'audio.mp4'
+# prefix for support multiple downloads in same folder
+files_prefix = ''.join(choice(ascii_lowercase) for i in range(20)) + '_'
 
-download(video, video_tmp_file, base_url + video['base_url'], max_workers)
-download(audio, audio_tmp_file, base_url + audio['base_url'], max_workers)
+video_tmp_file = files_prefix + 'video.mp4'
+video = content['video'][vid_idx]
+download(video, video_tmp_file, base_url + video['base_url'])
 
+audio_tmp_file = None
+if audio_present:
+    audio_tmp_file = files_prefix + 'audio.mp4'
+    audio = content['audio'][audio_idx]
+    download(audio, audio_tmp_file, base_url + audio['base_url'])
 
-def combine_video_audio(video_file, audio_file, output_file):
-    try:
-        video_stream = ffmpeg.input(video_file)
-        audio_stream = ffmpeg.input(audio_file)
+if not audio_present:
+    os.rename(video_tmp_file, name)
+    sys.exit(0)
 
-        ffmpeg.output(video_stream, audio_stream, output_file,
-                      vcodec='copy', acodec='copy').run(overwrite_output=True)
+if has_ffmpeg:
+    subprocess.run(['ffmpeg', '-i', video_tmp_file, '-i', audio_tmp_file, '-c:v', 'copy', '-c:a', 'copy', name])
+    os.remove(video_tmp_file)
+    os.remove(audio_tmp_file)
+    sys.exit(0)
 
-        print(f"Fragments joined into {output_file}")
-    except ffmpeg.Error as e:
-        print(f"Cannot join fragments: {e.stderr.decode()}")
+video_clip = VideoFileClip(video_tmp_file)
+audio_clip = AudioFileClip(audio_tmp_file)
 
+final_clip = None
+if moviepy_deprecated:
+    final_clip = video_clip.set_audio(audio_clip)
+else:
+    final_clip = video_clip.with_audio(audio_clip)
 
-combine_video_audio('video.mp4', 'audio.mp4', name)
+final_clip.write_videofile(name)
 
 os.remove(video_tmp_file)
 os.remove(audio_tmp_file)
