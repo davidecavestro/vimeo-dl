@@ -45,6 +45,10 @@ url = url = os.getenv("SRC_URL") or input('enter [master|playlist].json url: ')
 name = os.getenv("OUT_FILE") or input('enter output name: ')
 max_workers = min(int(os.getenv("MAX_WORKERS", 5)), 15)
 
+if 'deps://install' == url:
+    print('exiting afteter installing dependencies')
+    sys.exit(0)
+
 if 'master.json' in url:
     url = url[:url.find('?')] + '?query_string_ranges=1'
     url = url.replace('master.json', 'master.mpd')
