@@ -41,8 +41,9 @@ if not has_ffmpeg:
     except ImportError:
         from moviepy import *  # after 2.0
 
-url = input('enter [master|playlist].json url: ')
-name = input('enter output name: ')
+url = url = os.getenv("SRC_URL") or input('enter [master|playlist].json url: ')
+name = os.getenv("OUT_FILE") or input('enter output name: ')
+max_workers = min(int(os.getenv("MAX_WORKERS", 5)), 15)
 
 if 'master.json' in url:
     url = url[:url.find('?')] + '?query_string_ranges=1'
@@ -82,7 +83,7 @@ def download(what, to, base):
     segment_urls = [base + segment['url'] for segment in what['segments']]
     segment_paths = [f"segment_{i}_" + segment_suffix + ".tmp" for i in range(len(segment_urls))]
 
-    with ThreadPoolExecutor(max_workers=15) as executor:
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         list(tqdm(executor.map(download_segment, segment_urls, segment_paths), total=len(segment_urls)))
 
     with open(to, 'wb') as file:
