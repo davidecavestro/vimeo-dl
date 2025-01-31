@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2025-01-31
+### :wrench: Chores
+- [`cb11e69`](https://github.com/davidecavestro/vimeo-dl/commit/cb11e6972022db657b55eb0d0b2874725ef48501) - autoinstall deps *(commit by [@davidecavestro](https://github.com/davidecavestro))*
+
+
 ## [0.2.0] - 2025-01-31
 ### :sparkles: New Features
 - [`6feea0a`](https://github.com/davidecavestro/vimeo-dl/commit/6feea0aaf9fa0241035729188290f39d3a563dd0) - align to script version from kbabanov at 2025-01-27 *(commit by [@davidecavestro](https://github.com/davidecavestro))*
@@ -21,3 +26,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [0.1.0]: https://github.com/davidecavestro/vimeo-dl/compare/0.0.0...0.1.0
 [0.2.0]: https://github.com/davidecavestro/vimeo-dl/compare/0.1.0...0.2.0
+[0.2.1]: https://github.com/davidecavestro/vimeo-dl/compare/0.2.0...0.2.1
