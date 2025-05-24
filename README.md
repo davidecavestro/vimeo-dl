@@ -1,7 +1,7 @@
 # vimeo-dl
 
-A container image based on [Javi3rV script](https://gist.github.com/alexeygrigorev/a1bc540925054b71e1a7268e50ad55cd?permalink_comment_id=5279414#gistcomment-5279414) to download segmented videos from vimeo.
-It supports playlist.json and master.json urls.
+A container image based on [Javi3rV script](https://gist.github.com/alexeygrigorev/a1bc540925054b71e1a7268e50ad55cd?permalink_comment_id=5279414#gistcomment-5279414) to download segmented videos from vimeo.<br>
+It supports _playlist.json_ and _master.json_ urls.
 
 
 ## Example usage
