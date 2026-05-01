@@ -1,69 +1,71 @@
-import importlib.metadata
+#!/usr/bin/env python3
+"""vimeo-dl: Download segmented videos from Vimeo CDN."""
+
+import argparse
+import base64
+import os
 import subprocess
 import sys
-
-required = {'requests', 'tqdm', 'moviepy'}
-installed = {pkg.metadata['Name'] for pkg in importlib.metadata.distributions()}
-missing = required - installed
-
-if missing:
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'])
-    subprocess.check_call([sys.executable, '-m', 'pip', 'install', *missing])
-
-
-import os
-import base64
-import requests
-from shutil import which
-from tqdm import tqdm
 from random import choice
+from shutil import which
 from string import ascii_lowercase
 from concurrent.futures import ThreadPoolExecutor
 
-has_ffmpeg = False
-moviepy_deprecated = False
-has_youtube_dl = False
-has_yt_dlp = False
+__version__ = '0.3.0'
 
-if which('ffmpeg') is not None:
-    has_ffmpeg = True
+# Lazy-loaded after ensure_deps()
+requests = None
+tqdm = None
 
-if which('youtube-dl') is not None:
-    has_youtube_dl = True
 
-if which('yt-dlp') is not None:
-    has_yt_dlp = True
+def parse_args():
+    parser = argparse.ArgumentParser(
+        prog='vimeo-dl',
+        description='Download segmented videos from Vimeo CDN.',
+        epilog='''examples:
+  vimeo-dl 'https://...playlist.json?...' -o my_video
+  vimeo-dl 'https://...master.json?...' -o my_video
+  vimeo-dl 'https://...playlist.json?...' -o /path/to/my_video -w 10
 
-if not has_ffmpeg:
-    try:
-        from moviepy.editor import *  # before 2.0, deprecated
-        moviepy_deprecated = True
-    except ImportError:
-        from moviepy import *  # after 2.0
+NOTE: Always quote the URL to prevent shell interpretation of special
+characters (?, &, =, etc). Use single quotes to be safe.''',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
 
-url = url = os.getenv("SRC_URL") or input('enter [master|playlist].json url: ')
-name = os.getenv("OUT_FILE") or input('enter output name: ')
-max_workers = min(int(os.getenv("MAX_WORKERS", 5)), 15)
+    parser.add_argument(
+        'url', nargs='?', default=None,
+        help="playlist.json or master.json URL (QUOTE THIS -- it contains &, =, etc)",
+    )
+    parser.add_argument(
+        '-o', '--output', default=None, metavar='NAME',
+        help='output filename without .mp4 extension (can include path)',
+    )
+    parser.add_argument(
+        '-w', '--workers', type=int, default=None, metavar='N',
+        help='parallel download threads (default: 5, max: 15)',
+    )
+    parser.add_argument(
+        '-v', '--version', action='version', version=f'%(prog)s {__version__}',
+    )
 
-if 'deps://install' == url:
-    print('exiting afteter installing dependencies')
-    sys.exit(0)
+    args = parser.parse_args()
 
-if 'master.json' in url:
-    url = url[:url.find('?')] + '?query_string_ranges=1'
-    url = url.replace('master.json', 'master.mpd')
-    print(url)
+    # Resolve values: CLI args > env vars > interactive prompt
+    args.url = args.url or os.getenv('SRC_URL') or input('enter [master|playlist].json url: ')
+    args.output = args.output or os.getenv('OUT_FILE') or input('enter output name: ')
+    args.workers = min(args.workers or int(os.getenv('MAX_WORKERS', 5)), 15)
 
-    if has_youtube_dl:
-        subprocess.run(['youtube-dl', url, '-o', name])
-        sys.exit(0)
+    return args
 
-    if has_yt_dlp:
-        subprocess.run(['yt-dlp', url, '-o', name])
-        sys.exit(0)
 
-    print('you should have youtube-dl or yt-dlp in your PATH to download master.json like links')
-    sys.exit(1)
+def ensure_deps():
+    import importlib.metadata
+    required = {'requests', 'tqdm', 'moviepy'}
+    installed = {pkg.metadata['Name'] for pkg in importlib.metadata.distributions()}
+    missing = required - installed
+    if missing:
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'])
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', *missing])
 
 
 def download_segment(segment_url, segment_path):
@@ -77,7 +79,7 @@ def download_segment(segment_url, segment_path):
             segment_file.write(chunk)
 
 
-def download(what, to, base):
+def download(what, to, base, max_workers):
     print('saving', what['mime_type'], 'to', to)
     init_segment = base64.b64decode(what['init_segment'])
 
@@ -100,63 +102,111 @@ def download(what, to, base):
     print('done')
 
 
-name += '.mp4'
-base_url = url[:url.rfind('/', 0, -26) + 1]
-response = requests.get(url)
-if response.status_code >= 400:
-    print('error: cant get url content, test your link in browser, code=', response.status_code, '\ncontent:\n', response.content)
-    sys.exit(1)
+def main():
+    args = parse_args()
+    ensure_deps()
 
-content = response.json()
+    global requests, tqdm
+    import requests as _requests
+    from tqdm import tqdm as _tqdm
+    requests = _requests
+    tqdm = _tqdm
 
-vid_heights = [(i, d['height']) for (i, d) in enumerate(content['video'])]
-vid_idx, _ = max(vid_heights, key=lambda _h: _h[1])
+    has_ffmpeg = which('ffmpeg') is not None
+    has_youtube_dl = which('youtube-dl') is not None
+    has_yt_dlp = which('yt-dlp') is not None
 
-audio_present = True
-if not content['audio']:
-    audio_present = False
+    moviepy_deprecated = False
+    if not has_ffmpeg:
+        try:
+            from moviepy.editor import VideoFileClip, AudioFileClip  # before 2.0, deprecated
+            moviepy_deprecated = True
+        except ImportError:
+            from moviepy import VideoFileClip, AudioFileClip  # after 2.0
 
-audio_quality = None
-audio_idx = None
-if audio_present:
-    audio_quality = [(i, d['bitrate']) for (i, d) in enumerate(content['audio'])]
-    audio_idx, _ = max(audio_quality, key=lambda _h: _h[1])
+    url = args.url
+    name = args.output
+    max_workers = args.workers
 
-base_url = base_url + content['base_url']
+    if 'deps://install' == url:
+        print('exiting afteter installing dependencies')
+        sys.exit(0)
 
-# prefix for support multiple downloads in same folder
-files_prefix = ''.join(choice(ascii_lowercase) for i in range(20)) + '_'
+    if 'master.json' in url:
+        url = url[:url.find('?')] + '?query_string_ranges=1'
+        url = url.replace('master.json', 'master.mpd')
+        print(url)
 
-video_tmp_file = files_prefix + 'video.mp4'
-video = content['video'][vid_idx]
-download(video, video_tmp_file, base_url + video['base_url'])
+        if has_youtube_dl:
+            subprocess.run(['youtube-dl', url, '-o', name])
+            sys.exit(0)
 
-audio_tmp_file = None
-if audio_present:
-    audio_tmp_file = files_prefix + 'audio.mp4'
-    audio = content['audio'][audio_idx]
-    download(audio, audio_tmp_file, base_url + audio['base_url'])
+        if has_yt_dlp:
+            subprocess.run(['yt-dlp', url, '-o', name])
+            sys.exit(0)
 
-if not audio_present:
-    os.rename(video_tmp_file, name)
-    sys.exit(0)
+        print('you should have youtube-dl or yt-dlp in your PATH to download master.json like links')
+        sys.exit(1)
 
-if has_ffmpeg:
-    subprocess.run(['ffmpeg', '-i', video_tmp_file, '-i', audio_tmp_file, '-c:v', 'copy', '-c:a', 'copy', name])
+    name += '.mp4'
+    base_url = url[:url.rfind('/', 0, -26) + 1]
+    response = requests.get(url)
+    if response.status_code >= 400:
+        print('error: cant get url content, test your link in browser, code=', response.status_code, '\ncontent:\n', response.content)
+        sys.exit(1)
+
+    content = response.json()
+
+    vid_heights = [(i, d['height']) for (i, d) in enumerate(content['video'])]
+    vid_idx, _ = max(vid_heights, key=lambda _h: _h[1])
+
+    audio_present = True
+    if not content['audio']:
+        audio_present = False
+
+    audio_idx = None
+    if audio_present:
+        audio_quality = [(i, d['bitrate']) for (i, d) in enumerate(content['audio'])]
+        audio_idx, _ = max(audio_quality, key=lambda _h: _h[1])
+
+    base_url = base_url + content['base_url']
+
+    # prefix for support multiple downloads in same folder
+    files_prefix = ''.join(choice(ascii_lowercase) for i in range(20)) + '_'
+
+    video_tmp_file = files_prefix + 'video.mp4'
+    video = content['video'][vid_idx]
+    download(video, video_tmp_file, base_url + video['base_url'], max_workers)
+
+    audio_tmp_file = None
+    if audio_present:
+        audio_tmp_file = files_prefix + 'audio.mp4'
+        audio = content['audio'][audio_idx]
+        download(audio, audio_tmp_file, base_url + audio['base_url'], max_workers)
+
+    if not audio_present:
+        os.rename(video_tmp_file, name)
+        sys.exit(0)
+
+    if has_ffmpeg:
+        subprocess.run(['ffmpeg', '-i', video_tmp_file, '-i', audio_tmp_file, '-c:v', 'copy', '-c:a', 'copy', name])
+        os.remove(video_tmp_file)
+        os.remove(audio_tmp_file)
+        sys.exit(0)
+
+    video_clip = VideoFileClip(video_tmp_file)
+    audio_clip = AudioFileClip(audio_tmp_file)
+
+    if moviepy_deprecated:
+        final_clip = video_clip.set_audio(audio_clip)
+    else:
+        final_clip = video_clip.with_audio(audio_clip)
+
+    final_clip.write_videofile(name)
+
     os.remove(video_tmp_file)
     os.remove(audio_tmp_file)
-    sys.exit(0)
 
-video_clip = VideoFileClip(video_tmp_file)
-audio_clip = AudioFileClip(audio_tmp_file)
 
-final_clip = None
-if moviepy_deprecated:
-    final_clip = video_clip.set_audio(audio_clip)
-else:
-    final_clip = video_clip.with_audio(audio_clip)
-
-final_clip.write_videofile(name)
-
-os.remove(video_tmp_file)
-os.remove(audio_tmp_file)
+if __name__ == '__main__':
+    main()

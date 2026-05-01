@@ -6,6 +6,17 @@ It supports _playlist.json_ and _master.json_ urls.
 
 ## Example usage
 
+### From the command line
+
+```bash
+python video.py 'https://...playlist.json?...' -o my_video
+```
+
+Environment variables (`SRC_URL`, `OUT_FILE`, `MAX_WORKERS`) are still honored
+as fallbacks, so existing Docker/compose setups continue to work unchanged.
+
+Run `python video.py --help` for the full flag list.
+
 ### From docker CLI
 
 ```bash
